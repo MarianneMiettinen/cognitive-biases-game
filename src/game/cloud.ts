@@ -3,7 +3,7 @@
 // so each player automatically gets their own save at users/{uid}. Google sign-in is optional
 // and only needed to continue the same progress on another device.
 import { useSyncExternalStore } from 'react';
-import { CLOUD_ENABLED, clearPlayer, levelOf, setPlayer, type Progress } from './progress';
+import { CLOUD_ENABLED, clearPlayer, levelOf, merge, normalize, setPlayer, type Progress } from './progress';
 
 export type CloudStatus = 'off' | 'connecting' | 'synced' | 'offline';
 type CloudState = { status: CloudStatus; isAnonymous: boolean; name: string | null; error: string | null };
@@ -68,6 +68,8 @@ export async function startCloud() {
     }
 
     // Saves are debounced; `flush` writes the pending one right away (before a sign-out).
+    // Each save reads the cloud copy first and merges, so a device that was offline, or a second
+    // device open on the same account, adds to the save instead of overwriting it.
     let pending: { uid: string; data: Progress } | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const flush = async () => {
@@ -76,10 +78,17 @@ export async function startCloud() {
       pending = null;
       if (!job) return;
       try {
-        await fs.setDoc(fs.doc(db, 'users', job.uid), toDoc(job.data));
+        const ref = fs.doc(db, 'users', job.uid);
+        const snap = await fs.getDoc(ref); // throws while offline, so we never write blind
+        const data = snap.exists() ? merge(job.data, normalize(snap.data() as Partial<Progress>)) : job.data;
+        await fs.setDoc(ref, toDoc(data));
         set({ status: 'synced' });
       } catch {
         set({ status: 'offline' });
+        if (!pending && auth.currentUser?.uid === job.uid) {
+          pending = job; // keep it and try again shortly
+          timer = setTimeout(flush, 15000);
+        }
       }
     };
     const saverFor = (uid: string) => (p: Progress) => {
@@ -135,7 +144,10 @@ export async function startCloud() {
     };
 
     signOutImpl = async () => {
-      await flush();
+      // Save what we can, but never let a slow or offline connection block signing out.
+      await Promise.race([flush(), new Promise((r) => setTimeout(r, 3000))]);
+      clearTimeout(timer);
+      pending = null;
       clearPlayer();
       await fa.signOut(auth); // onAuthStateChanged then starts a fresh guest
     };

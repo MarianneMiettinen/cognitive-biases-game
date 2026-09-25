@@ -33,7 +33,7 @@ const fresh = (): Progress => ({
   updatedAt: 0,
 });
 
-function normalize(raw: Partial<Progress> | null | undefined): Progress {
+export function normalize(raw: Partial<Progress> | null | undefined): Progress {
   const base = fresh();
   if (!raw) return base;
   return {
