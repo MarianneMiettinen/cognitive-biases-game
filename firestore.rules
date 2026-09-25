@@ -1,0 +1,20 @@
+rules_version = '2';
+// Each player can only read and write their own progress document.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'xp', 'level', 'unlockedCards', 'defeatedCreatures', 'memoryProgress',
+          'battlesWon', 'soundOn', 'updatedAt'
+        ])
+        && request.resource.data.xp is int
+        && request.resource.data.unlockedCards.size() <= 200;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
